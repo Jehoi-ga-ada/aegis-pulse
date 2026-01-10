@@ -34,7 +34,7 @@ func (a *TradeAdapter) Subscribe(ctx context.Context, symbol string) (<-chan *ma
 		log.Fatalf("Error connecting to WebSocket: %v", err)
 	}
 
-	handler, err := wsClient.WebsocketStreams.WebSocketStreamsAPI.Trade().Symbol("btcusdt").Execute()
+	handler, err := wsClient.WebsocketStreams.WebSocketStreamsAPI.Trade().Symbol(symbol).Execute()
 	if err != nil {
 		log.Fatalf("Error subscribing to stream: %v", err)
 	}

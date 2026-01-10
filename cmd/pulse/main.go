@@ -5,13 +5,12 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
-	"time"
 
-	// "google.golang.org/protobuf/encoding/protojson"
-	marketv1 "github.com/Jehoi-ga-ada/aegis-genome/gen/go/market/v1"
 	"github.com/Jehoi-ga-ada/aegis-pulse/internal/adapters/binance"
-	"github.com/redis/go-redis/v9"
+	"github.com/redis/rueidis"
+	"google.golang.org/protobuf/proto"
 )
 
 func main() {
@@ -19,9 +18,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 2. Setup Redis (Infrastructure)
-	rdb := redis.NewClient(&redis.Options{Addr: "localhost: 6739"})
-	defer rdb.Close()
+	// 2. Setup Ruedis (Infrastructure)
+	client, err := rueidis.NewClient(rueidis.ClientOption{
+		InitAddress: []string{"localhost:6379"}, 
+	})
+	if err != nil {
+		log.Fatalf("Redis connect error: %v", err)
+	}
+	defer client.Close()
 
 	// 3. Start Adapter
 	adapter := &binance.TradeAdapter{}
@@ -32,31 +36,30 @@ func main() {
 
 	log.Println("Adapter started. Listening for trades...")
 
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	var latestEvent *marketv1.MarketEvent
-
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("Shutting down...")
 			return
 		case event, ok := <-eventChan:
-			if !ok {
-				return
-			}
-			// 1. UPDATE: Always capture the newest data in memory.
-			// This is an instant operation that never blocks.
-			latestEvent = event
+			if !ok { return }
 
-		case <-ticker.C:
-			// 2. LOG: Only print the latest snapshot twice per second.
-			if latestEvent != nil {
-				price := latestEvent.GetTick().Price
-				latency := (latestEvent.ReceivedTimeNs - latestEvent.EventTimeNs) / 1_000_000
-				log.Printf("Price: %s | Latency: %dms", price, latency)
-			}
+			data, _ := proto.Marshal(event)
+
+			go func(d []byte) {
+				cmd := client.B().Xadd().
+					Key("market:btcusdt:trades").
+					Maxlen().Almost().Threshold(strconv.Itoa(1000)). // Use Almost() for high-speed ~ trimming
+					Id("*").                          // Auto-generate Redis ID
+					FieldValue().FieldValue("d", string(d)).       // Field "d", Value is binary data
+					Build()
+
+				err := client.Do(ctx, cmd).Error()
+				
+				if err != nil && err != rueidis.Nil {
+					log.Printf("Redis error: %v", err)
+				}
+			}(data)
 		}
 	}
 }
